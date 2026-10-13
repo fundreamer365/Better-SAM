@@ -1,6 +1,8 @@
-// Better SAM — веб-синтезатор речи с эффектами
-// SAM-ядро: sam-js (BSD-2-Clause, Sebastian Macke / Joshua Scoggins)
-import SamJs from 'https://cdn.jsdelivr.net/npm/sam-js@0.3.2/+esm';
+// sam.js подключён глобально через <script> в index.html → window.SamJs
+const SamJs = window.SamJs;
+if (!SamJs) {
+  console.error('sam-js не загрузился с CDN. Проверь <script src=".../sam.js"> в index.html.');
+}
 
 /* ============================================================
  *  UTIL
