@@ -1,17 +1,24 @@
-// sam.js подключён глобально через <script> в index.html → window.SamJs
-// sam.js подключён через <script> в index.html. Достаём класс из любой обёртки.
+/* ============================================================
+ *  Better SAM — веб-синтезатор речи с эффектами
+ *  SAM-ядро: sam-js@0.3.0 (Christian Schiffler, порт SAM)
+ *  Загружается через <script src="https://cdn.jsdelivr.net/npm/sam-js@0.3.0/sam.js">
+ *  в index.html ПЕРЕД этим модулем. Вешается в window.SamJs.
+ * ========================================================== */
+
+// Достаём конструктор из любой обёртки. Без throw — модуль не должен падать.
 const _raw = window.SamJs;
-const SamJs = (() => {
-  if (typeof _raw === 'function') return _raw;                       // уже класс
-  if (_raw && typeof _raw.SamJs === 'function') return _raw.SamJs;   // { SamJs }
-  if (_raw && typeof _raw.default === 'function') return _raw.default;// { default }
-  if (_raw && _raw.default && typeof _raw.default.SamJs === 'function')
-    return _raw.default.SamJs;
-  console.error('Не нашёл конструктор SamJs в window.SamJs:', _raw);
-  throw new Error('SamJs не найден. Проверь <script src=".../sam.js"> в index.html');
-})();
+function resolveSamJs(raw) {
+  if (typeof raw === 'function') return raw;                       // сам класс
+  if (raw && typeof raw.SamJs === 'function') return raw.SamJs;    // { SamJs }
+  if (raw && typeof raw.default === 'function') return raw.default; // { default }
+  if (raw && raw.default && typeof raw.default.SamJs === 'function')
+    return raw.default.SamJs;
+  return null;
+}
+const SamJs = resolveSamJs(_raw);
 if (!SamJs) {
-  console.error('sam-js не загрузился с CDN. Проверь <script src=".../sam.js"> в index.html.');
+  console.error('SamJs не найден. window.SamJs =', _raw,
+    '\nПроверь <script src="https://cdn.jsdelivr.net/npm/sam-js@0.3.0/sam.js"> в index.html');
 }
 
 /* ============================================================
@@ -179,12 +186,10 @@ const SAM_SR = 22050;
 class SamEngine {
   constructor() { this.lastBuffer = null; }
 
-  /**
-   * Генерирует PCM через sam-js и возвращает AudioBuffer.
-   * sam-js: new SamJs({pitch, speed, mouth, throat}) .buf8(text) → Uint8Array (unsigned 8-bit)
-   */
   async generate(text, opts) {
+    if (!SamJs) throw new Error('sam-js не загружен (window.SamJs пустой). Проверь <script src=".../sam.js"> в index.html.');
     if (!text || !text.trim()) throw new Error('Пустой текст');
+
     const samOpts = {};
     if (opts.pitch  != null) samOpts.pitch  = clamp(opts.pitch | 0, 0, 255);
     if (opts.speed  != null) samOpts.speed  = clamp(opts.speed | 0, 0, 255);
@@ -192,10 +197,9 @@ class SamEngine {
     if (opts.throat != null) samOpts.throat = clamp(opts.throat | 0, 0, 255);
 
     const sam = new SamJs(samOpts);
-    // sam-js отдаёт Uint8Array (unsigned), частота 22050, mono
+    // sam-js отдаёт Uint8Array (unsigned, 22050 Hz, mono)
     const u8 = sam.buf8(text);
 
-    // Вставляем «паузы» между словами, если пользователь задал pause > 0
     const pauseMs = clamp(opts.pause | 0, 0, 200);
     const pauseSamples = Math.floor((pauseMs / 1000) * SAM_SR);
 
@@ -207,10 +211,8 @@ class SamEngine {
     if (pauseSamples === 0) {
       for (let i = 0; i < u8.length; i++) ch[i] = (u8[i] - 128) / 128;
     } else {
-      // простой приём: на каждой границе пробела вставляем тишину
-      let w = 0, out = 0, wordIdx = 0;
-      // определим точки вставки как равномерные между словами
-      const words = text.trim().split(/\s+/).length;
+      let out = 0, wordIdx = 0;
+      const words = text.trim().split(/\s+/).filter(Boolean).length;
       const step = Math.floor(u8.length / Math.max(1, words));
       let next = step;
       for (let i = 0; i < u8.length; i++) {
@@ -224,7 +226,6 @@ class SamEngine {
       while (out < totalLen) ch[out++] = 0;
     }
 
-    // Применяем мастер-громкость уже здесь (до эффектов), чтобы FX видели уровень
     const vol = opts.volume ?? 1;
     if (vol !== 1) for (let i = 0; i < ch.length; i++) ch[i] *= vol;
 
@@ -251,39 +252,35 @@ class FXChain {
     this.limiter.release.value = 0.08;
     this.limiter.connect(this.output);
 
-    this.fx = {}; // key → node group
+    this.fx = {};
     this.order = [];
     this.buildAll();
     this.rebuild();
   }
 
-  /* --- фабрики --- */
   buildAll() {
     const ctx = this.ctx;
-    const self = this;
+    this.fx.eq          = makeEQ(ctx);
+    this.fx.distortion  = makeDistortion(ctx);
+    this.fx.bitcrusher  = makeBitcrusher(ctx);
+    this.fx.chorus      = makeChorus(ctx);
+    this.fx.flanger     = makeFlanger(ctx);
+    this.fx.phaser      = makePhaser(ctx);
+    this.fx.delay       = makeDelay(ctx);
+    this.fx.reverb      = makeReverb(ctx);
+    this.fx.compressor  = makeCompressor(ctx);
+    this.fx.pitchshift  = makePitchShift(ctx);
+    this.fx.tremolo     = makeTremolo(ctx);
+    this.fx.autopan     = makeAutoPan(ctx);
+    this.fx.filters     = makeFilters(ctx);
+    this.fx.noise       = makeNoise(ctx);
+    this.fx.phone       = makePhone(ctx);
+    this.fx.radio       = makeRadio(ctx);
+    this.fx.robot       = makeRobot(ctx);
+    this.fx.space       = makeSpace(ctx);
+    this.fx.vhs         = makeVHS(ctx);
+    this.fx.glitch      = makeGlitch(ctx);
 
-    this.fx.eq = makeEQ(ctx);
-    this.fx.distortion = makeDistortion(ctx);
-    this.fx.bitcrusher = makeBitcrusher(ctx);
-    this.fx.chorus = makeChorus(ctx);
-    this.fx.flanger = makeFlanger(ctx);
-    this.fx.phaser = makePhaser(ctx);
-    this.fx.delay = makeDelay(ctx);
-    this.fx.reverb = makeReverb(ctx);
-    this.fx.compressor = makeCompressor(ctx);
-    this.fx.pitchshift = makePitchShift(ctx);
-    this.fx.tremolo = makeTremolo(ctx);
-    this.fx.autopan = makeAutoPan(ctx);
-    this.fx.filters = makeFilters(ctx);
-    this.fx.noise = makeNoise(ctx);
-    this.fx.phone = makePhone(ctx);
-    this.fx.radio = makeRadio(ctx);
-    this.fx.robot = makeRobot(ctx);
-    this.fx.space = makeSpace(ctx);
-    this.fx.vhs = makeVHS(ctx);
-    this.fx.glitch = makeGlitch(ctx);
-
-    // Заданный порядок обработки
     this.order = [
       'eq', 'filters', 'distortion', 'bitcrusher', 'pitchshift', 'robot',
       'chorus', 'flanger', 'phaser', 'phone', 'radio', 'vhs', 'glitch',
@@ -292,26 +289,20 @@ class FXChain {
   }
 
   rebuild() {
-    // Отключаем все известные связи
     try { this.input.disconnect(); } catch {}
     for (const k of this.order) {
       const fx = this.fx[k];
       try { fx.output.disconnect(); } catch {}
     }
-
     let prev = this.input;
     for (const k of this.order) {
       const fx = this.fx[k];
-      if (fx.on) {
-        prev.connect(fx.input);
-        prev = fx.output;
-      }
+      if (fx.on) { prev.connect(fx.input); prev = fx.output; }
     }
     prev.connect(this.limiter);
     this.limiter.connect(this.output);
   }
 
-  /* --- update from preset --- */
   applyFX(patch = {}) {
     for (const k of Object.keys(this.fx)) {
       const p = patch[k];
@@ -330,7 +321,6 @@ class FXChain {
     this.rebuild();
   }
 
-  /* --- Play: подключаем буфер и играем --- */
   play(buffer, onEnded) {
     this.stop();
     const src = this.ctx.createBufferSource();
@@ -352,7 +342,6 @@ class FXChain {
     if (this.ctx.state === 'suspended') this.ctx.resume();
   }
 
-  /* --- Offline render для WAV --- */
   async renderOffline(buffer, durationSec) {
     const total = Math.ceil((buffer.duration + (durationSec || 0)) * buffer.sampleRate);
     const off = new OfflineAudioContext(2, total, buffer.sampleRate);
@@ -369,36 +358,34 @@ class FXChain {
     chain.fx = {};
     chain.order = this.order.slice();
 
-    // Пересобираем все фабрики в offline-контексте
-    chain.fx.eq = makeEQ(off);
-    chain.fx.distortion = makeDistortion(off);
-    chain.fx.bitcrusher = makeBitcrusher(off);
-    chain.fx.chorus = makeChorus(off);
-    chain.fx.flanger = makeFlanger(off);
-    chain.fx.phaser = makePhaser(off);
-    chain.fx.delay = makeDelay(off);
-    chain.fx.reverb = makeReverb(off);
-    chain.fx.compressor = makeCompressor(off);
-    chain.fx.pitchshift = makePitchShift(off);
-    chain.fx.tremolo = makeTremolo(off);
-    chain.fx.autopan = makeAutoPan(off);
-    chain.fx.filters = makeFilters(off);
-    chain.fx.noise = makeNoise(off);
-    chain.fx.phone = makePhone(off);
-    chain.fx.radio = makeRadio(off);
-    chain.fx.robot = makeRobot(off);
-    chain.fx.space = makeSpace(off);
-    chain.fx.vhs = makeVHS(off);
-    chain.fx.glitch = makeGlitch(off);
+    chain.fx.eq          = makeEQ(off);
+    chain.fx.distortion  = makeDistortion(off);
+    chain.fx.bitcrusher  = makeBitcrusher(off);
+    chain.fx.chorus      = makeChorus(off);
+    chain.fx.flanger     = makeFlanger(off);
+    chain.fx.phaser      = makePhaser(off);
+    chain.fx.delay       = makeDelay(off);
+    chain.fx.reverb      = makeReverb(off);
+    chain.fx.compressor  = makeCompressor(off);
+    chain.fx.pitchshift  = makePitchShift(off);
+    chain.fx.tremolo     = makeTremolo(off);
+    chain.fx.autopan     = makeAutoPan(off);
+    chain.fx.filters     = makeFilters(off);
+    chain.fx.noise       = makeNoise(off);
+    chain.fx.phone       = makePhone(off);
+    chain.fx.radio       = makeRadio(off);
+    chain.fx.robot       = makeRobot(off);
+    chain.fx.space       = makeSpace(off);
+    chain.fx.vhs         = makeVHS(off);
+    chain.fx.glitch      = makeGlitch(off);
 
-    // Копируем состояние
     for (const k of this.order) {
       const s = this.fx[k];
       const d = chain.fx[k];
       d.setOn(s.on);
       d.setParams(s.params || {});
     }
-    // offline-цепочка
+
     let prev = chain.input;
     for (const k of chain.order) {
       const fx = chain.fx[k];
@@ -417,10 +404,7 @@ class FXChain {
   }
 }
 
-/* -------- Фабрики эффектов --------
- * Каждая возвращает { on, input, output, setOn, setParams, params, defaults }
- * Внутри — реальные Web Audio узлы.
- * ------------------------------------------------------------------ */
+/* -------- Фабрики эффектов -------- */
 
 function baseFx(input, output, defaults) {
   return { on: false, input, output, params: { ...defaults }, defaults,
@@ -429,7 +413,6 @@ function baseFx(input, output, defaults) {
   };
 }
 
-/* EQ: 3-полосный + опционально shelf/peak */
 function makeEQ(ctx) {
   const low = ctx.createBiquadFilter(); low.type = 'lowshelf';
   const mid = ctx.createBiquadFilter(); mid.type = 'peaking';
@@ -450,7 +433,6 @@ function makeEQ(ctx) {
   return fx;
 }
 
-/* Distortion: waveshaper + tone LPF */
 function makeDistortion(ctx) {
   const inGain = ctx.createGain();
   const shaper = ctx.createWaveShaper();
@@ -468,7 +450,7 @@ function makeDistortion(ctx) {
       let y;
       if (mode === 'hard') y = Math.sign(x) * Math.pow(Math.abs(x), 1 / (1 + amount * 8));
       else if (mode === 'fold') y = Math.sin(x * (1 + amount * 6));
-      else y = Math.tanh(x * (1 + amount * 8)); // soft
+      else y = Math.tanh(x * (1 + amount * 8));
       c[i] = y;
     }
     return c;
@@ -485,16 +467,13 @@ function makeDistortion(ctx) {
   return fx;
 }
 
-/* Bitcrusher: скриптлет через AudioWorklet или WaveShaper + понижение sample rate */
 function makeBitcrusher(ctx) {
-  // Без AudioWorklet — используем ScriptProcessor только для offline/online совместимости.
-  // ScriptProcessor deprecated, но работает в Chrome/Firefox и в OfflineAudioContext.
   const dry = ctx.createGain(); dry.gain.value = 0;
   const wet = ctx.createGain(); wet.gain.value = 1;
   const out = ctx.createGain();
 
   const proc = ctx.createScriptProcessor ? ctx.createScriptProcessor(1024, 1, 1) : null;
-  let hold = 0, phase = 0, lastVal = 0;
+  let phase = 0, lastVal = 0;
   const params = { bits: 8, sr: 22050, mix: 1 };
 
   if (proc) {
@@ -504,10 +483,7 @@ function makeBitcrusher(ctx) {
       const step = Math.max(1, Math.round(ctx.sampleRate / params.sr));
       const levels = Math.pow(2, params.bits);
       for (let i = 0; i < inp.length; i++) {
-        if (phase % step === 0) {
-          const x = inp[i];
-          lastVal = Math.round(x * levels) / levels;
-        }
+        if (phase % step === 0) lastVal = Math.round(inp[i] * levels) / levels;
         outb[i] = lastVal;
         phase++;
       }
@@ -528,7 +504,6 @@ function makeBitcrusher(ctx) {
   return fx;
 }
 
-/* Chorus: LFO + modulated delay */
 function makeChorus(ctx) {
   const inG = ctx.createGain();
   const out = ctx.createGain();
@@ -564,7 +539,6 @@ function makeChorus(ctx) {
   return fx;
 }
 
-/* Flanger: короче delay, сильнее feedback */
 function makeFlanger(ctx) {
   const inG = ctx.createGain();
   const out = ctx.createGain();
@@ -591,7 +565,6 @@ function makeFlanger(ctx) {
   return fx;
 }
 
-/* Phaser: цепочка allpass + LFO */
 function makePhaser(ctx) {
   const inG = ctx.createGain();
   const out = ctx.createGain();
@@ -627,7 +600,6 @@ function makePhaser(ctx) {
   return fx;
 }
 
-/* Delay / Echo с ping-pong и bpm */
 function makeDelay(ctx) {
   const inG = ctx.createGain();
   const out = ctx.createGain();
@@ -639,7 +611,6 @@ function makeDelay(ctx) {
   const fbL = ctx.createGain(); fbL.gain.value = 0.3;
   const fbR = ctx.createGain(); fbR.gain.value = 0.3;
   const merger = ctx.createChannelMerger(2);
-  const splitter = ctx.createChannelSplitter(2);
 
   inG.connect(dl);
   dl.connect(merger, 0, 0);
@@ -647,7 +618,6 @@ function makeDelay(ctx) {
   merger.connect(wet).connect(out);
   inG.connect(dry).connect(out);
 
-  // ping-pong: dl → dr → dl
   dl.connect(dr);
   dr.connect(fbR).connect(dl);
   dl.connect(fbL);
@@ -656,7 +626,8 @@ function makeDelay(ctx) {
   fx.apply = (p) => {
     let t = p.time ?? 0.3;
     if (p.bpm) t = (60 / p.bpm) * (p.beat ?? 0.25);
-    if (dl.delayTime.value !== t) { dl.delayTime.value = t; dr.delayTime.value = t * 1.0; }
+    dl.delayTime.value = t;
+    dr.delayTime.value = t;
     const fb = clamp(p.feedback ?? 0.3, 0, 0.85);
     fbL.gain.value = fb;
     fbR.gain.value = p.pingpong ? fb : 0;
@@ -666,7 +637,6 @@ function makeDelay(ctx) {
   return fx;
 }
 
-/* Reverb: Convolver с генерируемой IR (реальный ревербератор, не эхо) */
 function makeReverb(ctx) {
   const inG = ctx.createGain();
   const out = ctx.createGain();
@@ -675,12 +645,10 @@ function makeReverb(ctx) {
   const pre = ctx.createDelay(0.5); pre.delayTime.value = 0.02;
   const conv = ctx.createConvolver();
   const damp = ctx.createBiquadFilter(); damp.type = 'lowpass'; damp.frequency.value = 6000;
-  const width = ctx.createGain();
 
   inG.connect(dry).connect(out);
   inG.connect(pre).connect(conv).connect(damp).connect(wet).connect(out);
 
-  // IR builder
   function buildIR(size, decay, dampVal) {
     const sr = ctx.sampleRate;
     const len = Math.max(0.2, size * decay) * sr | 0;
@@ -711,7 +679,6 @@ function makeReverb(ctx) {
   return fx;
 }
 
-/* Compressor */
 function makeCompressor(ctx) {
   const c = ctx.createDynamicsCompressor();
   const makeup = ctx.createGain(); makeup.gain.value = 1;
@@ -729,37 +696,28 @@ function makeCompressor(ctx) {
   return fx;
 }
 
-/* Pitch Shift: phase-vocoder-lite (2× overlap-add, time-stretch + resample) */
 function makePitchShift(ctx) {
-  // В real-time без worklet качественный pitch-shift сложен.
-  // Реализуем честный упрощённый гранулярный шифтер через ScriptProcessor:
-  // два перекрывающихся окна, читающие буфер с изменяемой скоростью и кроссфейдом.
   const dry = ctx.createGain(); dry.gain.value = 1;
   const wet = ctx.createGain(); wet.gain.value = 0.7;
   const out = ctx.createGain();
 
   const proc = ctx.createScriptProcessor ? ctx.createScriptProcessor(2048, 1, 1) : null;
   const params = { semitones: 0, mix: 0.7 };
-  let ring = new Float32Array(1 << 16);
+  const ring = new Float32Array(1 << 16);
   let w = 0;
-  const GRAIN = 1024, HOP = 512;
+  const GRAIN = 1024;
 
   if (proc) {
     proc.onaudioprocess = (e) => {
       const inp = e.inputBuffer.getChannelData(0);
       const outb = e.outputBuffer.getChannelData(0);
-      // пишем во входное кольцо
       for (let i = 0; i < inp.length; i++) { ring[w & (ring.length - 1)] = inp[i]; w++; }
-      // читаем питч-сдвинутый сигнал с гранулярным ресемплингом
       const speed = Math.pow(2, params.semitones / 12);
       for (let i = 0; i < outb.length; i++) {
-        // фаза внутр. гранулы
         const g = ((w + i) % GRAIN) / GRAIN;
         const win = 0.5 - 0.5 * Math.cos(2 * Math.PI * g);
-        // источник читается со скоростью 1/speed
         const idx = Math.floor((w + i) / speed);
-        const s = ring[((idx % ring.length) + ring.length) % ring.length] * win;
-        outb[i] = s;
+        outb[i] = ring[((idx % ring.length) + ring.length) % ring.length] * win;
       }
     };
     proc.connect(wet);
@@ -778,15 +736,13 @@ function makePitchShift(ctx) {
   return fx;
 }
 
-/* Tremolo */
 function makeTremolo(ctx) {
   const inG = ctx.createGain();
   const out = ctx.createGain();
   const lfo = ctx.createOscillator(); lfo.frequency.value = 4;
-  const lfoGain = ctx.createGain(); lfoGain.gain.value = 0.5;
-  const depth = ctx.createGain(); depth.gain.value = 0.5;
+  const depth = ctx.createGain(); depth.gain.value = 0.25;
   lfo.connect(depth).connect(inG.gain); lfo.start();
-  inG.gain.value = 0.5;
+  inG.gain.value = 0.75;
   inG.connect(out);
   const fx = baseFx(inG, out, { rate: 4, depth: 0.5 });
   fx.apply = (p) => {
@@ -797,7 +753,6 @@ function makeTremolo(ctx) {
   return fx;
 }
 
-/* AutoPan */
 function makeAutoPan(ctx) {
   const inG = ctx.createGain();
   const out = ctx.createGain();
@@ -819,13 +774,11 @@ function makeAutoPan(ctx) {
     fx.apply(fx.params);
     return fx;
   }
-  // Fallback: нет StereoPanner — просто pass-through
   const fx = baseFx(inG, out, { rate: 0.3, depth: 0.8, mix: 1 });
   fx.setOn = () => {};
   return fx;
 }
 
-/* Filters: HPF + LPF */
 function makeFilters(ctx) {
   const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 20;
   const lp = ctx.createBiquadFilter(); lp.type = 'lowpass';  lp.frequency.value = 20000;
@@ -839,7 +792,6 @@ function makeFilters(ctx) {
   return fx;
 }
 
-/* Noise: генератор шума, подмешиваемый в сигнал */
 function makeNoise(ctx) {
   const inG = ctx.createGain();
   const out = ctx.createGain();
@@ -864,7 +816,6 @@ function makeNoise(ctx) {
   return fx;
 }
 
-/* Phone: 300–3400 band-pass + резонанс */
 function makePhone(ctx) {
   const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 300; hp.Q.value = 1;
   const lp = ctx.createBiquadFilter(); lp.type = 'lowpass';  lp.frequency.value = 3400; lp.Q.value = 1;
@@ -880,7 +831,6 @@ function makePhone(ctx) {
   return fx;
 }
 
-/* Radio: band-pass + distortion + узкая полоса */
 function makeRadio(ctx) {
   const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 500;
   const lp = ctx.createBiquadFilter(); lp.type = 'lowpass';  lp.frequency.value = 2500;
@@ -889,11 +839,9 @@ function makeRadio(ctx) {
   for (let i = 0; i < n; i++) { const x = (i * 2) / (n - 1) - 1; c[i] = Math.tanh(x * 3); }
   dist.curve = c;
   hp.connect(lp).connect(dist);
-  const fx = baseFx(hp, dist, {});
-  return fx;
+  return baseFx(hp, dist, {});
 }
 
-/* Robot: кольцевой модулятор + короткий comb */
 function makeRobot(ctx) {
   const inG = ctx.createGain();
   const out = ctx.createGain();
@@ -901,8 +849,7 @@ function makeRobot(ctx) {
   const wet = ctx.createGain(); wet.gain.value = 0.5;
   const ring = ctx.createGain(); ring.gain.value = 0;
   const osc = ctx.createOscillator(); osc.type = 'sine'; osc.frequency.value = 60;
-  const oscGain = ctx.createGain(); oscGain.gain.value = 1;
-  osc.connect(oscGain).connect(ring.gain); osc.start();
+  osc.connect(ring.gain); osc.start();
   inG.connect(ring).connect(wet).connect(out);
   inG.connect(dry).connect(out);
   const fx = baseFx(inG, out, { freq: 60, mix: 0.5 });
@@ -914,7 +861,6 @@ function makeRobot(ctx) {
   return fx;
 }
 
-/* Space: haas + long reverb-ish */
 function makeSpace(ctx) {
   const inG = ctx.createGain();
   const out = ctx.createGain();
@@ -935,7 +881,6 @@ function makeSpace(ctx) {
   return fx;
 }
 
-/* VHS: wow/flutter (медленная модуляция задержки) + шум + LPF */
 function makeVHS(ctx) {
   const inG = ctx.createGain();
   const out = ctx.createGain();
@@ -960,7 +905,6 @@ function makeVHS(ctx) {
   return fx;
 }
 
-/* Glitch: случайные короткие задержки/вырезания */
 function makeGlitch(ctx) {
   const inG = ctx.createGain();
   const out = ctx.createGain();
@@ -973,6 +917,7 @@ function makeGlitch(ctx) {
   inG.connect(dry).connect(out);
   let timer = null;
   const params = { mix: 0.5, rate: 6, depth: 0.5, crackle: 0.4 };
+  const fx = baseFx(inG, out, { mix: 0.5, rate: 6, depth: 0.5, crackle: 0.4 });
   function tick() {
     if (!fx.on) return;
     const base = 0.02 + Math.random() * 0.15;
@@ -980,7 +925,6 @@ function makeGlitch(ctx) {
     fb.gain.setValueAtTime(0.1 + Math.random() * params.depth * 0.7, ctx.currentTime);
     timer = setTimeout(tick, 1000 / Math.max(1, params.rate));
   }
-  const fx = baseFx(inG, out, { mix: 0.5, rate: 6, depth: 0.5, crackle: 0.4 });
   fx.setOn = function (v) {
     this.on = !!v;
     if (this.on) { clearTimeout(timer); tick(); }
@@ -1002,7 +946,6 @@ function makeGlitch(ctx) {
 const engine = new SamEngine();
 const chain = new FXChain();
 
-/* Описание UI эффектов */
 const FX_UI = [
   { key: 'eq', name: 'Equalizer', params: [
     { id: 'low',  label: 'Low',   min: -24, max: 24, step: 0.5, def: 0 },
@@ -1107,7 +1050,6 @@ const FX_UI = [
   ]},
 ];
 
-/* Строим UI */
 const fxListEl = $('#fxList');
 const uiRefs = {};
 for (const def of FX_UI) {
@@ -1185,7 +1127,6 @@ function stepDecimals(step) {
   return 3;
 }
 
-/* Синхронизация UI ↔ состояние цепочки */
 function syncUIFromChain() {
   for (const def of FX_UI) {
     const fx = chain.fx[def.key];
@@ -1202,7 +1143,6 @@ function syncUIFromChain() {
   }
 }
 
-/* ---- параметры голоса ---- */
 const voice = { pitch: 64, speed: 72, mouth: 128, throat: 128, volume: 1, pause: 0 };
 function bindVoice(id, key, decimals) {
   const el = $('#' + id), v = $('#' + id + 'V');
@@ -1219,7 +1159,6 @@ bindVoice('pThroat', 'throat', 0);
 bindVoice('pVol', 'volume', 2);
 bindVoice('pPause', 'pause', 0);
 
-/* ---- кнопки ---- */
 const btnGen = $('#btnGen');
 const btnPlay = $('#btnPlay');
 const btnPause = $('#btnPause');
@@ -1284,7 +1223,6 @@ btnWav.addEventListener('click', async () => {
   if (!lastBuffer) return;
   setStatus('Рендер WAV…');
   try {
-    // Хвост эффектов: время реверба + delay, чтобы ничего не обрезалось
     const tail = (chain.fx.reverb.on ? chain.fx.reverb.params.decay : 0) +
                  (chain.fx.delay.on ? (chain.fx.delay.params.time * (1 / (1 - Math.min(0.85, chain.fx.delay.params.feedback)))) : 0) +
                  0.3;
@@ -1305,7 +1243,6 @@ btnWav.addEventListener('click', async () => {
   }
 });
 
-/* ---- волновая форма ---- */
 const cv = $('#wave'), ctx2d = cv.getContext('2d');
 function drawWave(buf) {
   const w = cv.width, h = cv.height;
@@ -1329,14 +1266,12 @@ function drawWave(buf) {
     ctx2d.lineTo(x + 0.5, y2);
   }
   ctx2d.stroke();
-  // сетка
   ctx2d.strokeStyle = '#ffffff10';
   ctx2d.beginPath();
   ctx2d.moveTo(0, h / 2); ctx2d.lineTo(w, h / 2);
   ctx2d.stroke();
 }
 
-/* ---- пресеты ---- */
 const presetsEl = $('#presetsBuiltin');
 for (const name of Object.keys(BUILTIN_PRESETS)) {
   const b = document.createElement('button');
@@ -1346,7 +1281,6 @@ for (const name of Object.keys(BUILTIN_PRESETS)) {
 }
 
 function applyPreset(preset) {
-  // voice
   Object.assign(voice, preset.voice || {});
   $('#pPitch').value = voice.pitch; $('#pPitchV').textContent = voice.pitch;
   $('#pSpeed').value = voice.speed; $('#pSpeedV').textContent = voice.speed;
@@ -1355,7 +1289,6 @@ function applyPreset(preset) {
   $('#pVol').value = voice.volume; $('#pVolV').textContent = fmt(voice.volume, 2);
   $('#pPause').value = voice.pause; $('#pPauseV').textContent = fmt(voice.pause, 0);
 
-  // fx — сначала сброс, потом применение
   chain.resetFX();
   if (preset.fx) chain.applyFX(preset.fx);
   syncUIFromChain();
@@ -1363,7 +1296,6 @@ function applyPreset(preset) {
   toast('Пресет загружен', 'ok');
 }
 
-/* Сохранение/загрузка JSON */
 $('#btnSavePreset').addEventListener('click', () => {
   const data = {
     type: 'better-sam-preset',
@@ -1399,8 +1331,6 @@ $('#btnResetFX').addEventListener('click', () => {
   toast('Эффекты сброшены', 'ok');
 });
 
-/* ---- инициализация ---- */
 syncUIFromChain();
 setStatus('Готов (нажмите Generate)');
-// Разблокировка AudioContext по первому жесту
 window.addEventListener('pointerdown', () => { chain.ctx.resume().catch(()=>{}); }, { once: true });
