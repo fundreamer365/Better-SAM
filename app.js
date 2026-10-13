@@ -1,24 +1,21 @@
 /* ============================================================
  *  Better SAM — веб-синтезатор речи с эффектами
- *  SAM-ядро: sam-js@0.3.0 (Christian Schiffler, порт SAM)
- *  Загружается через <script src="https://cdn.jsdelivr.net/npm/sam-js@0.3.0/sam.js">
- *  в index.html ПЕРЕД этим модулем. Вешается в window.SamJs.
+ *  SAM-ядро: sam-js@0.3.0 (UMD, подключается через <script src="./sam.js">)
  * ========================================================== */
 
 // Достаём конструктор из любой обёртки. Без throw — модуль не должен падать.
 const _raw = window.SamJs;
 function resolveSamJs(raw) {
-  if (typeof raw === 'function') return raw;                       // сам класс
-  if (raw && typeof raw.SamJs === 'function') return raw.SamJs;    // { SamJs }
-  if (raw && typeof raw.default === 'function') return raw.default; // { default }
-  if (raw && raw.default && typeof raw.default.SamJs === 'function')
-    return raw.default.SamJs;
+  if (typeof raw === 'function') return raw;
+  if (raw && typeof raw.SamJs === 'function') return raw.SamJs;
+  if (raw && typeof raw.default === 'function') return raw.default;
+  if (raw && raw.default && typeof raw.default.SamJs === 'function') return raw.default.SamJs;
   return null;
 }
 const SamJs = resolveSamJs(_raw);
 if (!SamJs) {
   console.error('SamJs не найден. window.SamJs =', _raw,
-    '\nПроверь <script src="https://cdn.jsdelivr.net/npm/sam-js@0.3.0/sam.js"> в index.html');
+    '\nПроверь <script src="./sam.js"> в index.html');
 }
 
 /* ============================================================
@@ -80,7 +77,7 @@ function encodeWAV(buffer) {
 }
 
 /* ============================================================
- *  PRESETS — только параметры
+ *  PRESETS
  * ========================================================== */
 const BUILTIN_PRESETS = {
   'Classic SAM': {
@@ -187,7 +184,7 @@ class SamEngine {
   constructor() { this.lastBuffer = null; }
 
   async generate(text, opts) {
-    if (!SamJs) throw new Error('sam-js не загружен (window.SamJs пустой). Проверь <script src=".../sam.js"> в index.html.');
+    if (!SamJs) throw new Error('sam-js не загружен (window.SamJs пустой). Проверь <script src="./sam.js"> в index.html.');
     if (!text || !text.trim()) throw new Error('Пустой текст');
 
     const samOpts = {};
@@ -251,6 +248,9 @@ class FXChain {
     this.limiter.attack.value = 0.002;
     this.limiter.release.value = 0.08;
     this.limiter.connect(this.output);
+    // ВАЖНО: подключаем выход к колонкам. Без этой строки онлайн-плеер молчит,
+    // а WAV работает, потому что в offline-рендере есть отдельный connect до off.destination.
+    this.output.connect(this.ctx.destination);
 
     this.fx = {};
     this.order = [];
@@ -1195,7 +1195,15 @@ btnGen.addEventListener('click', async () => {
 
 btnPlay.addEventListener('click', async () => {
   if (!lastBuffer) return;
-  await chain.ctx.resume();
+  try {
+    if (chain.ctx.state !== 'running') await chain.ctx.resume();
+  } catch (e) {
+    console.warn('AudioContext resume failed:', e);
+  }
+  if (chain.ctx.state !== 'running') {
+    toast('Браузер блокирует звук — кликни по странице и попробуй ещё раз', 'err');
+    return;
+  }
   chain.play(lastBuffer, () => {
     setStatus('Стоп');
     btnPause.textContent = 'Pause';
