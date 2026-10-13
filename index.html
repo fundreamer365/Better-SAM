@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+<title>Better SAM — веб-синтезатор речи</title>
+<style>
+  :root{
+    --bg:#0c0d12; --panel:#15161e; --panel-2:#1c1e29; --line:#262a38;
+    --txt:#e8eaf2; --muted:#8b90a6; --accent:#8b5cf6; --accent-2:#22d3ee;
+    --ok:#34d399; --warn:#fbbf24; --err:#f87171;
+    --radius:12px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--txt);
+    font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;}
+  header{
+    display:flex;align-items:center;gap:16px;padding:14px 20px;
+    border-bottom:1px solid var(--line);background:linear-gradient(180deg,#141520,#0c0d12);
+    position:sticky;top:0;z-index:10;
+  }
+  header h1{margin:0;font-size:18px;letter-spacing:.5px}
+  header h1 span{
+    background:linear-gradient(90deg,var(--accent),var(--accent-2));
+    -webkit-background-clip:text;background-clip:text;color:transparent;
+  }
+  header .status{margin-left:auto;color:var(--muted);font-size:12px}
+  main{
+    display:grid;grid-template-columns: 1.2fr 1fr;gap:16px;
+    padding:16px;max-width:1400px;margin:0 auto;
+  }
+  @media (max-width: 980px){ main{grid-template-columns:1fr} }
+  .panel{
+    background:var(--panel);border:1px solid var(--line);
+    border-radius:var(--radius);padding:14px;
+  }
+  .panel h2{
+    margin:0 0 10px;font-size:13px;text-transform:uppercase;
+    letter-spacing:1.2px;color:var(--muted)
+  }
+  textarea{
+    width:100%;min-height:140px;resize:vertical;background:var(--panel-2);
+    border:1px solid var(--line);border-radius:10px;color:var(--txt);
+    padding:10px 12px;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace;
+    outline:none;transition:border-color .15s;
+  }
+  textarea:focus{border-color:var(--accent)}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px}
+  button{
+    background:var(--panel-2);border:1px solid var(--line);color:var(--txt);
+    padding:9px 14px;border-radius:10px;cursor:pointer;font:inherit;
+    transition:.15s transform,.15s background,.15s border-color;
+  }
+  button:hover{background:#22243180;border-color:#384056}
+  button:active{transform:translateY(1px)}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  button.primary{
+    background:linear-gradient(180deg,var(--accent),#6d3fe0);
+    border-color:#7c4dff;color:#fff;font-weight:600;
+  }
+  button.accent{
+    background:linear-gradient(180deg,#1ea9c9,#0e7f9e);border-color:#1ea9c9;color:#031018;
+  }
+  button.ghost{background:transparent}
+  button.danger{border-color:#5a2630;color:#ffb3b3}
+  .canvas-wrap{
+    position:relative;margin-top:10px;border-radius:10px;overflow:hidden;
+    background:#0a0b10;border:1px solid var(--line);
+  }
+  canvas{display:block;width:100%;height:110px}
+  .timeline{
+    display:flex;justify-content:space-between;font-size:11px;
+    color:var(--muted);padding:4px 6px;border-top:1px solid var(--line);
+  }
+  .fx-list{display:grid;gap:8px;max-height:70vh;overflow:auto;padding-right:4px}
+  .fx{
+    background:var(--panel-2);border:1px solid var(--line);border-radius:10px;
+    overflow:hidden;
+  }
+  .fx .head{
+    display:flex;align-items:center;gap:10px;padding:10px 12px;cursor:pointer;
+    user-select:none;
+  }
+  .fx .head:hover{background:#1f2230}
+  .fx .head .name{font-weight:600}
+  .fx .head .chev{margin-left:auto;color:var(--muted);transition:.2s}
+  .fx.open .head .chev{transform:rotate(90deg)}
+  .fx .body{display:none;padding:6px 12px 14px;border-top:1px solid var(--line)}
+  .fx.open .body{display:block}
+  .switch{
+    width:34px;height:20px;border-radius:20px;background:#333a50;position:relative;
+    flex:none;transition:background .15s;border:1px solid #2c3348;
+  }
+  .switch::after{
+    content:"";position:absolute;top:1px;left:1px;width:16px;height:16px;border-radius:50%;
+    background:#c8cbe0;transition:.18s;
+  }
+  .switch.on{background:var(--accent);border-color:var(--accent)}
+  .switch.on::after{left:15px;background:#fff}
+  .ctrl{display:grid;grid-template-columns: 110px 1fr 56px;gap:8px;align-items:center;margin:7px 0}
+  .ctrl label{color:var(--muted);font-size:12px}
+  .ctrl input[type=range]{width:100%;accent-color:var(--accent)}
+  .ctrl .val{
+    text-align:right;font:12px/1 ui-monospace,Menlo,Consolas,monospace;
+    color:var(--accent-2)
+  }
+  .ctrl select{
+    grid-column: 1 / -1;background:var(--panel);color:var(--txt);
+    border:1px solid var(--line);border-radius:8px;padding:6px
+  }
+  .presets{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+  .presets button{padding:6px 10px;font-size:12px}
+  .toast{
+    position:fixed;left:50%;bottom:20px;transform:translateX(-50%) translateY(20px);
+    background:#0f1118;border:1px solid var(--line);border-radius:10px;
+    padding:10px 16px;opacity:0;transition:.25s;pointer-events:none;z-index:999;
+    box-shadow:0 10px 30px #0008;
+  }
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  .toast.err{border-color:#5a2630;color:#ffb3b3}
+  .toast.ok{border-color:#1f6b4a;color:#b9f6d6}
+  .badge{font-size:11px;color:var(--muted);margin-left:6px}
+</style>
+</head>
+<body>
+<header>
+  <h1><span>Better SAM</span></h1>
+  <div class="status" id="status">Готов</div>
+</header>
+
+<main>
+  <!-- ЛЕВАЯ: текст и плеер -->
+  <section class="panel">
+    <h2>Текст</h2>
+    <textarea id="text" spellcheck="false">Hello. I am Better SAM. This is my new voice.</textarea>
+
+    <div class="row">
+      <button id="btnGen" class="primary">Generate</button>
+      <button id="btnPlay" class="accent" disabled>Play</button>
+      <button id="btnPause" disabled>Pause</button>
+      <button id="btnStop" disabled>Stop</button>
+      <button id="btnWav" disabled>Download WAV</button>
+    </div>
+
+    <div class="canvas-wrap">
+      <canvas id="wave" width="1200" height="220"></canvas>
+      <div class="timeline">
+        <span id="tCur">0.00s</span>
+        <span id="tDur">0.00s</span>
+      </div>
+    </div>
+
+    <h2 style="margin-top:16px">Голос SAM</h2>
+    <div class="fx-list">
+      <div class="ctrl"><label>Pitch</label>
+        <input type="range" id="pPitch" min="0" max="255" value="64">
+        <span class="val" id="pPitchV">64</span></div>
+      <div class="ctrl"><label>Speed</label>
+        <input type="range" id="pSpeed" min="0" max="255" value="72">
+        <span class="val" id="pSpeedV">72</span></div>
+      <div class="ctrl"><label>Mouth</label>
+        <input type="range" id="pMouth" min="0" max="255" value="128">
+        <span class="val" id="pMouthV">128</span></div>
+      <div class="ctrl"><label>Throat</label>
+        <input type="range" id="pThroat" min="0" max="255" value="128">
+        <span class="val" id="pThroatV">128</span></div>
+      <div class="ctrl"><label>Volume</label>
+        <input type="range" id="pVol" min="0" max="2" step="0.01" value="1">
+        <span class="val" id="pVolV">1.00</span></div>
+      <div class="ctrl"><label>Pause&nbsp;(ms)</label>
+        <input type="range" id="pPause" min="0" max="200" step="5" value="0">
+        <span class="val" id="pPauseV">0</span></div>
+    </div>
+
+    <h2 style="margin-top:16px">Пресеты</h2>
+    <div class="presets" id="presetsBuiltin"></div>
+    <div class="row">
+      <button id="btnSavePreset" class="ghost">Сохранить пресет (.json)</button>
+      <button id="btnLoadPreset" class="ghost">Загрузить пресет</button>
+      <input id="filePreset" type="file" accept="application/json" hidden>
+      <button id="btnResetFX" class="danger">Сбросить эффекты</button>
+    </div>
+  </section>
+
+  <!-- ПРАВАЯ: эффекты -->
+  <section class="panel">
+    <h2>Цепочка эффектов</h2>
+    <div class="fx-list" id="fxList"></div>
+  </section>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script type="module" src="./app.js"></script>
+</body>
+</html>
