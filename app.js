@@ -1,5 +1,15 @@
 // sam.js подключён глобально через <script> в index.html → window.SamJs
-const SamJs = window.SamJs;
+// sam.js подключён через <script> в index.html. Достаём класс из любой обёртки.
+const _raw = window.SamJs;
+const SamJs = (() => {
+  if (typeof _raw === 'function') return _raw;                       // уже класс
+  if (_raw && typeof _raw.SamJs === 'function') return _raw.SamJs;   // { SamJs }
+  if (_raw && typeof _raw.default === 'function') return _raw.default;// { default }
+  if (_raw && _raw.default && typeof _raw.default.SamJs === 'function')
+    return _raw.default.SamJs;
+  console.error('Не нашёл конструктор SamJs в window.SamJs:', _raw);
+  throw new Error('SamJs не найден. Проверь <script src=".../sam.js"> в index.html');
+})();
 if (!SamJs) {
   console.error('sam-js не загрузился с CDN. Проверь <script src=".../sam.js"> в index.html.');
 }
